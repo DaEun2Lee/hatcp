@@ -89,6 +89,9 @@ void back_worker_queueing_cb(EV_P_ ev_async *w, int revents);
 void front_worker_fd_cb(EV_P_ ev_io *w, int revents);
 void back_worker_fd_cb(EV_P_ ev_io *w, int revents);
 
+void front_worker_process_stream(struct stream_entry *stream);
+void back_worker_process_stream(struct stream_entry *stream);
+
 void* worker_loop(void *worker);
 
 #endif

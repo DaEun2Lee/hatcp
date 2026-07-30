@@ -21,7 +21,7 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CC) $(OBJS) -o $@ $(LDFLAGS)
 
-%o: %.cc 
+%.o: %.cc 
 	$(CC) $(CFLAGS)  -o $@ -c $<
 
 clean:

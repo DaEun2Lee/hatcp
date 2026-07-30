@@ -1,12 +1,14 @@
 #ifndef ACC_H_
 #define ACC_H_
 
+#include <stdint.h>
 #include "plugin/plugin.h"
 
 #define	STREAM_IO_CLIFD			0
 #define STREAM_IO_LISTENFD		2
 #define STREAM_IO_WANFD			3
 #define STREAM_IO_TARGETFD		4
+#define STREAM_IO_WAN_CONNECTING         5
 
 struct stream_ev_io {
 	ev_io evio;
@@ -47,6 +49,7 @@ void wanacc_perf_cb(EV_P_ ev_timer *w, int revents);
 #endif
 void wanacc_new_wan_cb(EV_P_ ev_io *ws, int revents);
 void wanacc_new_stream_cb(EV_P_ ev_io *ws, int revents);
+void wanacc_accept_stream(struct wanacc_app *app);
 void stream_clean(struct stream_entry *stream);
 
 #endif

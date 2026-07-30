@@ -2,6 +2,7 @@
 #define UTILS_H_
 
 #include <time.h>
+#include <stdint.h>
 
 #define LOG_INFO		0
 #define LOG_APPERR		1

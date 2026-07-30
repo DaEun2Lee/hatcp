@@ -28,6 +28,12 @@ struct tcp_stat {
  * init_socks_socket is used for socket on remote server to connect to user
  *	requested server.
  */
+int init_linux_listener(int *, uint32_t, uint16_t);
+int accept_linux_socket(int);
+int connect_linux_socket(uint32_t, uint16_t);
+ssize_t read_linux_socket(int, void *, size_t);
+ssize_t write_linux_socket(int, const void *, size_t);
+int close_linux_socket(int);
 int init_socket(int *);
 int init_socket_somig(int *, int, uint32_t, uint16_t, int, uint32_t, uint16_t, 
     uint32_t, uint16_t);

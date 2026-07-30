@@ -1,0 +1,80 @@
+# ========================================
+# C/C++ build outputs
+# ========================================
+*.o
+*.a
+*.so
+*.so.*
+*.d
+
+/apps/wan_acc/wanacc
+/apps/wrkwrk/wrkwrk
+/apps/wrkwrk/wrkwrk.bin
+
+# ========================================
+# perf and FlameGraph raw outputs
+# ========================================
+/apps/wan_acc/*.data
+/apps/wan_acc/*.data.old
+/apps/wan_acc/*.perf
+/apps/wan_acc/*.folded
+/apps/wan_acc/*.svg
+
+perf.data
+perf.data.old
+
+# ========================================
+# Python cache
+# ========================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# ========================================
+# Backup and temporary source files
+# ========================================
+*.before_*
+*.bak*
+*.save
+*.orig
+*.rej
+*.working_*
+*.bad_*
+*broken*
+*~
+*.swp
+*.swo
+
+# ========================================
+# Old copied source trees and archives
+# ========================================
+/apps/wan_acc/before_mixed_stack_sync_*/
+/apps/wan_acc_before_fstack/
+/apps/wan_acc_fstack/
+/apps/wan_acc/*.tar.gz
+
+# ========================================
+# Generated experiment payloads
+# ========================================
+/apps/wrkwrk/received_direct_10m.bin
+
+# Accidental wrkwrk output files
+/apps/wrkwrk/How
+/apps/wrkwrk/connect_error++
+/apps/wrkwrk/error_count++
+/apps/wrkwrk/parse_error++
+/apps/wrkwrk/w_stat-
+
+# OS and editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Additional local backup files
+/apps/wan_acc/*.now_bad_*
+/apps/wan_acc_hatcp.tar.gz
+
+# Local experiment spreadsheets
+/apps/wrkwrk/*.xlsx

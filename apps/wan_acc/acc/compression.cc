@@ -5,7 +5,9 @@
 #include <string.h>
 #include <assert.h>
 #include <sys/queue.h>
+#ifndef HASH_MD5
 #include <sha256.h>
+#endif
 
 #include "lz4.h"
 #include "uthash.h"

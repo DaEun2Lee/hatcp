@@ -1,6 +1,8 @@
 #ifndef RBKP_H_
 #define RBKP_H_
 
+#include <openssl/sha.h>
+
 #define WINDOW_SIZE	(1024)
 #define HASH_PRIME	(31)
 

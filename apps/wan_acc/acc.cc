@@ -16,9 +16,20 @@
 #include "netutils.h"
 #include "io.h"
 #include "app.h"
+#include "hatcp_compat.h"
 #include "acc.h"
 #include "stats.h"
 #include "worker.h"
+#include <ff_api.h>
+#include <ff_epoll.h>
+
+#ifndef TAILQ_FOREACH_SAFE
+#define TAILQ_FOREACH_SAFE(var, head, field, tvar) \
+    for ((var) = TAILQ_FIRST((head)); \
+         (var) && ((tvar) = TAILQ_NEXT((var), field), 1); \
+         (var) = (tvar))
+#endif
+
 
 void
 wanacc_new_wan_cb(EV_P_ ev_io *ws, int revents)
@@ -28,72 +39,67 @@ wanacc_new_wan_cb(EV_P_ ev_io *ws, int revents)
 }
 
 void
+wanacc_accept_stream(struct wanacc_app *app)
+{
+        struct stream_entry *stream;
+        struct worker *w, *bw;
+        int fd;
+
+        DBG("LISTEN - New Linux client connection.");
+
+        fd = accept_linux_socket(app->listen_fd);
+        if (fd < 0) {
+                if (errno != EAGAIN && errno != EWOULDBLOCK)
+                        APPERR("Cannot accept Linux client connection.\n");
+                return;
+        }
+
+        DBG("LISTEN - New Linux connection fd %d", fd);
+
+        stream = (struct stream_entry *)calloc(1, sizeof(*stream));
+        if (stream == NULL) {
+                SYSERR(ENOMEM,
+                    "Cannot allocate enough memory for new connection.");
+                close_linux_socket(fd);
+                return;
+        }
+
+        assert(app->front_worker_next < app->front_worker_count);
+        w = &app->front_workers[app->front_worker_next++];
+        if (app->front_worker_next >= app->front_worker_count)
+                app->front_worker_next = 0;
+
+        bw = &app->back_workers[app->back_worker_next++];
+        if (app->back_worker_next >= app->back_worker_count)
+                app->back_worker_next = 0;
+
+        stream->fd = fd;
+        stream->app = app;
+        stream->hash = fd;
+        stream->worker = w;
+        stream->b_worker = bw;
+        stream->io.stream_type = STREAM_IO_CLIFD;
+        stream->io.stream = stream;
+        TAILQ_INIT(&stream->ioq);
+
+        pthread_mutex_lock(&app->streams_mtx);
+        TAILQ_INSERT_TAIL(&app->streams, stream, list);
+        pthread_mutex_unlock(&app->streams_mtx);
+
+        ev_io_init(&stream->io.evio, front_worker_fd_cb,
+            stream->fd, EV_READ);
+        ev_io_start(w->loop, &stream->io.evio);
+
+        DBG("Linux client fd%d registered to worker id%d type%d loop%p",
+            fd, w->id, w->type, w->loop);
+}
+
+void
 wanacc_new_stream_cb(EV_P_ ev_io *ws, int revents)
 {
-	struct stream_ev_io *sei;
-	struct wanacc_app *app;
-	struct stream_entry *stream;
-	struct worker *w, *bw;
-	int fd;
+        struct stream_ev_io *sei = (struct stream_ev_io *)ws;
 
-	sei = (struct stream_ev_io *)ws;
-	app = sei->app;
-
-	switch (sei->stream_type) {
-	case STREAM_IO_LISTENFD:
-		DBG("LISTEN - New client connection.");
-		
-		fd = accept_socket(app->listen_fd);
-		if (fd <= 0) {
-			APPERR("Cannot accept client connection.\n");
-			return;
-		}
-	
-		//printf("new conn %d\n", fd);
-		DBG("LISTEN - New connection fd %d", fd);
-		stream = (struct stream_entry *)calloc(1, sizeof(struct stream_entry));
-		if (!stream) {
-			SYSERR(ENOMEM, 
-			    "Cannot allocate enough memory for new connection.");
-			close(fd);
-			return;
-		}
-
-		/* Choose next worker */
-		assert(app->front_worker_next < app->front_worker_count);
-		w = &app->front_workers[app->front_worker_next++];
-		if (app->front_worker_next >= app->front_worker_count)
-			app->front_worker_next = 0;
-
-		bw = &app->back_workers[app->back_worker_next++];
-		if (app->back_worker_next >= app->back_worker_count)
-			app->back_worker_next = 0;
-
-		stream->fd = fd;
-		stream->app = app;
-		TAILQ_INIT(&stream->ioq);
-		stream->hash = fd;	/* TODO replace with real hash */
-		stream->worker = w;
-		stream->b_worker = bw;
-		stream->io.stream_type = STREAM_IO_CLIFD;
-		stream->io.stream = stream;
-		TAILQ_INSERT_TAIL(&(app->streams), stream, list);
-		
-		/* Register event into worker's evloop */
-		ev_io_init(&stream->io.evio, front_worker_fd_cb, stream->fd, EV_READ);
-		ev_io_start(w->loop, &stream->io.evio);
-		
-		DBG("Client fd%d registered to worker id%d type%d loop%p",
-		    fd, w->id, w->type, w->loop);
-		break;
-	case STREAM_IO_WANFD:
-		DBG("WANFD should not receive any new connection while running");
-		exit(0);
-		break;
-	default:
-		APPERR("Wrong stream type");
-		exit(0);
-	}
+        wanacc_accept_stream(sei->app);
 }
 
 void 
@@ -346,10 +352,13 @@ wanacc_perf_cb(EV_P_ ev_timer *w, int revents)
 	dedup_cycle_avg = dedup_cycle_sum / dedup_cycle_cnt;
 	compz_cycle_avg = compz_cycle_sum / compz_cycle_cnt;
 
-	printf("%u,%u,%u,%u,%u,%u,%u,%u,%u\n", front_fd_avg, back_fd_avg, \
-					 back_queue_avg, in_avg, out_avg, \
-					 dedup_cycle_sum, dedup_cycle_avg, \
-					 compz_cycle_sum, compz_cycle_avg);
+	/* CSV performance log disabled
+        printf("%u,%u,%u,%u,%u,%u,%u,%u,%u
+", front_fd_avg, back_fd_avg, \
+                                        back_queue_avg, in_avg, out_avg, \
+                                        dedup_cycle_sum, dedup_cycle_avg, \
+                                        compz_cycle_sum, compz_cycle_avg);
+        */
 
 #if defined(SOMIGRATION) && defined(SMG_PROFILING)
 	if (app->somig_mode == WANACC_SERVER_SMG_REPLICA) {
@@ -370,9 +379,33 @@ wanacc_perf_cb(EV_P_ ev_timer *w, int revents)
 void
 stream_clean(struct stream_entry *stream)
 {
-	ev_io_stop(stream->worker->loop, &stream->io.evio);
-	close(stream->fd);
-	TAILQ_REMOVE(&stream->app->streams, stream, list);
-	free(stream);
-	printf("NOT IMPLEMENTED\n");
+        struct wanacc_app *app;
+
+        if (stream == NULL)
+                return;
+
+        app = stream->app;
+
+        if (stream->io.stream_type == STREAM_IO_CLIFD ||
+            stream->io.stream_type == STREAM_IO_TARGETFD) {
+                if (stream->worker != NULL && stream->worker->loop != NULL)
+                        ev_io_stop(stream->worker->loop,
+                            &stream->io.evio);
+
+                close_linux_socket(stream->fd);
+        } else {
+                if (app != NULL && app->epfd >= 0)
+                        ff_epoll_ctl(app->epfd, EPOLL_CTL_DEL,
+                            stream->fd, NULL);
+
+                ff_close(stream->fd);
+        }
+
+        if (app != NULL) {
+                pthread_mutex_lock(&app->streams_mtx);
+                TAILQ_REMOVE(&app->streams, stream, list);
+                pthread_mutex_unlock(&app->streams_mtx);
+        }
+
+        free(stream);
 }

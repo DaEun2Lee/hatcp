@@ -1,14 +1,31 @@
 #ifndef UTILS_H_
 #define UTILS_H_
 
+#include <stdint.h>
 #include <time.h>
+
+#ifndef TAILQ_FOREACH_SAFE
+#define TAILQ_FOREACH_SAFE(var, head, field, tvar) \
+    for ((var) = TAILQ_FIRST((head)); \
+         (var) && ((tvar) = TAILQ_NEXT((var), field), 1); \
+         (var) = (tvar))
+#endif
+
 
 #define LOG_INFO		0
 #define LOG_APPERR		1
 #define LOG_SYSERR		2
 #define LOG_DEBUG		9
 
+#ifndef WANACC_ENABLE_DBG
+#define WANACC_ENABLE_DBG 0
+#endif
+
+#if WANACC_ENABLE_DBG
 #define DBG(...) debug_log(__FILE__, __func__, __LINE__, __VA_ARGS__)
+#else
+#define DBG(...) do { } while (0)
+#endif
 
 void APPERR(const char *, ...);
 void SYSERR(int, const char *, ...);

@@ -7,6 +7,7 @@
 
 #include "app.h"
 #include "utils.h"
+#include <ff_api.h>
 
 int
 main(int argc, char* argv[])
@@ -26,6 +27,14 @@ main(int argc, char* argv[])
 		usage();
 		exit(0);
 	}
+
+	char *ff_argv[] = {
+	        argv[0],
+	        "-c", "/data/f-stack-hatcp/config.ini",
+	        "-p", "0",
+	        NULL
+	};
+	ff_init(5, ff_argv);
 
 	DBG("wanacc pid:%u", getpid()); 
 

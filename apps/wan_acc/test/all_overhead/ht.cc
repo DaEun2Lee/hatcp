@@ -5,7 +5,9 @@
 #include <sys/types.h>
 #include <sys/queue.h>
 #include <string.h>
+#ifndef HASH_MD5
 #include <sha256.h>
+#endif
 
 #include "dedup.h"
 #include "rbkp.h"

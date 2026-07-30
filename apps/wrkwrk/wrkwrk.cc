@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -10,6 +11,7 @@
 #include <time.h>
 
 #include <pthread.h>
+#include <sched.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
@@ -363,6 +365,7 @@ wrkwrk_clean_conn(struct connection *conn, int close_conn, int keep_req)
 	if (close_conn) {
 		ev_io_stop(conn->loop, &conn->evio);
 		close(conn->fd);
+                conn->fd = -1;
 	}
 
 	if (conn->proxy_mode == WRKWRK_PROXY_MODE_SOCKS && close_conn) {
@@ -513,6 +516,11 @@ wrkwrk_connection_callback(EV_P_ ev_io *w, int revents)
 				}
 #endif
 			}
+			if (recvd_full) {
+			        conn->w_stat->total_request++;
+			        conn->w_stat->request++;
+			}
+
 			conn->fg_throughput += len;
 
 			pthread_spin_unlock(&(conn->w_stat->lock));
@@ -829,6 +837,21 @@ main(int argc, char * argv[])
 		exit(0);
 	}
 
+	cpu_set_t client_cpuset;
+	int affinity_ret;
+
+	CPU_ZERO(&client_cpuset);
+	CPU_SET(0, &client_cpuset);
+
+	affinity_ret = pthread_setaffinity_np(
+	    pthread_self(), sizeof(client_cpuset), &client_cpuset);
+
+	if (affinity_ret != 0) {
+		fprintf(stderr, "Failed to set wrkwrk affinity: %s\n",
+		    strerror(affinity_ret));
+		exit(1);
+	}
+
 	if (pthread_mutex_init(&thread_lock, NULL) != 0) {
 		APPERR("Failed to initialize mutex.");
 		exit(0);
@@ -876,7 +899,7 @@ main(int argc, char * argv[])
 
 	DBG("Starting main thread(s)..");
 	for (int i=0;i<app.threads;i++) {
-		init_wrkwrk_stat(&(w_stat[i]), app.duration); 
+		init_wrkwrk_stat(&(w_stat[i]), app.duration + app.warmup); 
 		t_arg[i].id = i;
 		t_arg[i].app = &app;
 		t_arg[i].w_stat = &w_stat[i]; 

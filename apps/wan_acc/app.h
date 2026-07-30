@@ -1,6 +1,7 @@
 #ifndef        APP_H_
 #define        APP_H_
 
+#include <stdint.h>
 #include <sys/queue.h>
 #include <sys/resource.h>
 
@@ -25,6 +26,17 @@
 #define WANACC_MAX_PLUGINS		64
 
 TAILQ_HEAD(stream_queue, stream_entry);
+
+struct tx_entry {
+        int fd;
+        int stream_type;
+        char *buf;
+        size_t len;
+        size_t offset;
+        TAILQ_ENTRY(tx_entry) list;
+};
+
+TAILQ_HEAD(tx_queue, tx_entry);
 
 struct wanacc_app {
 	uint16_t app_port;
@@ -74,6 +86,10 @@ struct wanacc_app {
 	char * usage_fn;
 	int run_time;
 	struct ev_loop *loop;
+
+int epfd;                    /* F-Stack epoll descriptor */
+struct tx_queue txq;         /* Worker -> F-Stack send queue */
+pthread_mutex_t txq_mtx;
 
 #ifdef SOMIGRATION
 	int failover;

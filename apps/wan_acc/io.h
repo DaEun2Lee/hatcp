@@ -1,6 +1,7 @@
 #ifndef IO_H_
 #define IO_H_
 
+#include <stdint.h>
 #include <sys/queue.h>
 
 #define IO_BUFFER_LENGTH_MAX		65536 * 2 

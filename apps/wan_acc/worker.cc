@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -12,6 +13,7 @@
 #include <arpa/inet.h>
 
 #include <pthread.h>
+#include <sched.h>
 #include <ev.h>
 
 #include "utils.h"
@@ -23,6 +25,46 @@
 #include "worker.h"
 #include "acc/dedup.h"
 #include "acc/compression.h"
+#include <ff_api.h>
+#include <ff_epoll.h>
+
+
+static FILE *chunk_size_log_fp = NULL;
+
+static void
+chunk_size_log_file(const char *fmt, ...)
+{
+        va_list ap;
+
+        if (chunk_size_log_fp == NULL) {
+                chunk_size_log_fp = fopen("/tmp/wanacc_chunk_size.txt", "w");
+                if (chunk_size_log_fp == NULL)
+                        return;
+        }
+
+        flockfile(chunk_size_log_fp);
+
+        va_start(ap, fmt);
+        vfprintf(chunk_size_log_fp, fmt, ap);
+        va_end(ap);
+
+        fprintf(chunk_size_log_fp, "\\n");
+        fflush(chunk_size_log_fp);
+
+        funlockfile(chunk_size_log_fp);
+}
+
+#define CHUNK_SIZE_LOG(fmt, ...) \
+        chunk_size_log_file(fmt, ##__VA_ARGS__)
+
+
+// Add by delee
+#ifndef TAILQ_FOREACH_SAFE
+#define TAILQ_FOREACH_SAFE(var, head, field, tvar)                  \
+    for ((var) = TAILQ_FIRST((head));                               \
+         (var) && ((tvar) = TAILQ_NEXT((var), field), 1);            \
+         (var) = (tvar))
+#endif
 
 static void front_worker_dedup(struct stream_entry *s, char *data, int len);
 static void back_worker_compress_send(struct data_entry *de, struct worker *w);
@@ -39,6 +81,35 @@ static void dummy_cb(EV_P_ ev_timer *w, int revents);
 
 int DEDUP_ENABLED = 1;
 int COMPRESSION_ENABLED = 1;
+
+static int
+enqueue_tx(struct wanacc_app *app, int fd, int stream_type,
+    const void *buf, size_t len)
+{
+        struct tx_entry *tx;
+
+        tx = (struct tx_entry *)calloc(1, sizeof(*tx));
+        if (tx == NULL)
+                return -1;
+
+        tx->buf = (char *)malloc(len);
+        if (tx->buf == NULL) {
+                free(tx);
+                return -1;
+        }
+
+        memcpy(tx->buf, buf, len);
+        tx->fd = fd;
+        tx->stream_type = stream_type;
+        tx->len = len;
+        tx->offset = 0;
+
+        pthread_mutex_lock(&app->txq_mtx);
+        TAILQ_INSERT_TAIL(&app->txq, tx, list);
+        pthread_mutex_unlock(&app->txq_mtx);
+
+        return 0;
+}
 
 /*
  * Called when:
@@ -57,11 +128,9 @@ front_worker_queueing_cb(EV_P_ ev_async *w, int revents)
  *	ES: REM_RX
  *	MS: CLI_RX
  */
-void 
-front_worker_fd_cb(EV_P_ ev_io *w, int revents)
+void
+front_worker_process_stream(struct stream_entry *stream)
 {
-	struct stream_ev_io *sei;
-	struct stream_entry *stream;
 	char buf[WANACC_IO_BUFFER_SIZE];
 	int n;
 	int ioe_complete;
@@ -72,13 +141,12 @@ front_worker_fd_cb(EV_P_ ev_io *w, int revents)
 
 	start_time = get_time_us();
 #endif
-
-	sei = (struct stream_ev_io *)w;
-	stream = sei->stream;
-
-	n = readonce_socket(stream->fd, buf, sizeof(buf));
+	n = read_linux_socket(stream->fd, buf, sizeof(buf));
 	if (n == -1) {
-		APPERR("Connection was closed by client (Err %d).\n", errno);
+		if (errno == EAGAIN || errno == EWOULDBLOCK)
+            return;
+
+    APPERR("Connection was closed by client (Err %d).\n", errno);
 		stream_clean(stream);
 		return;
 	}
@@ -88,7 +156,7 @@ front_worker_fd_cb(EV_P_ ev_io *w, int revents)
 		return;
 	}
    
-	if (sei->stream_type == STREAM_IO_TARGETFD) 
+	if (stream->io.stream_type == STREAM_IO_TARGETFD) 
 		DBG("TRAFFIC - Target fd %d sent %d byte(s).", stream->fd, n);
 	else
 		DBG("TRAFFIC - Client fd %d sent %d byte(s).", stream->fd, n);
@@ -120,6 +188,15 @@ front_worker_fd_cb(EV_P_ ev_io *w, int revents)
 	stream->worker->front_fd_count++;
 #endif
 }
+
+
+void
+front_worker_fd_cb(EV_P_ ev_io *w, int revents)
+{
+        struct stream_ev_io *sei = (struct stream_ev_io *)w;
+        front_worker_process_stream(sei->stream);
+}
+
 
 /*
  * Called when:
@@ -166,11 +243,9 @@ back_worker_queueing_cb(EV_P_ ev_async *w, int revents)
  *	ES: WAN_MS_RX
  *	MS: WAN_ES_RX
  */
-void 
-back_worker_fd_cb(EV_P_ ev_io *w, int revents)
+void
+back_worker_process_stream(struct stream_entry *stream)
 {
-	struct stream_ev_io *sei;
-	struct stream_entry *stream;
 	struct wanacc_app *app;
 	struct worker *worker;
 	struct chunk *ck;
@@ -180,16 +255,16 @@ back_worker_fd_cb(EV_P_ ev_io *w, int revents)
 #ifdef PERF_PROFILING
 	uint64_t end_time;
 #endif
-
-	sei = (struct stream_ev_io *)w;
-	stream = sei->stream;
 	app = stream->app;
 	worker = stream->worker;
 
 	/* TODO: handle chunked packet */
 	n = readonce_socket(stream->fd, buf, sizeof(buf));
 	if (n == -1) {
-		APPERR("Connection was closed by remote wan (Err %d).\n", errno);
+		if (errno == EAGAIN || errno == EWOULDBLOCK)
+            return;
+
+    APPERR("Connection was closed by remote wan (Err %d).\n", errno);
 		stream_clean(stream);
 		return;
 	}
@@ -236,6 +311,15 @@ back_worker_fd_cb(EV_P_ ev_io *w, int revents)
 	}
 }
 
+
+void
+back_worker_fd_cb(EV_P_ ev_io *w, int revents)
+{
+        struct stream_ev_io *sei = (struct stream_ev_io *)w;
+        back_worker_process_stream(sei->stream);
+}
+
+
 static void
 front_worker_dedup(struct stream_entry *s, char *data, int len)
 {
@@ -281,6 +365,16 @@ front_worker_dedup(struct stream_entry *s, char *data, int len)
 			ck = dedup_chunk_data(data + d_offset, 
 				CHUNK_SIZE_TARGET, CHUNK_SIZE_MIN, 
 				CHUNK_SIZE_MAX, d_len, &bw->ht);
+
+        CHUNK_SIZE_LOG(
+            "[DEDUP_CHUNK] role=%s stream_fd=%d src_len=%u chunk_len=%u flag=0x%x dup=%d",
+            (app->mode == WANACC_SERVER) ? "ES" : "MS",
+            s->fd,
+            (unsigned)ck->src_len,
+            (unsigned)ck->len,
+            ck->flag,
+            !!(ck->flag & CHUNK_FLAG_DUP)
+        );
 #ifdef PERF_PROFILING
 			cycle_ed = get_cpucycle();
 			w->dedup_cycle_total += (cycle_ed - cycle_st);
@@ -314,7 +408,10 @@ front_worker_dedup(struct stream_entry *s, char *data, int len)
 		d_offset += ck->len;
 
 		/* Setup data_entry for next stage */
-		de = calloc(1, sizeof(struct data_entry));
+
+		// Modify by delee
+//		de = calloc(1, sizeof(struct data_entry));
+		de = (struct data_entry *)calloc(1, sizeof(struct data_entry));
 		if (!de) {
 			SYSERR(errno, "Failed to allocate memory for data entry");
 			return;
@@ -360,6 +457,11 @@ back_worker_compress_send(struct data_entry *de, struct worker *w)
 	 *  1. This is not a dupped chunk
 	 *  2. Compression is enabled
 	 */
+        unsigned before_src_len = de->data->src_len;
+        unsigned before_chunk_len = de->data->len;
+        unsigned before_flag = de->data->flag;
+
+
 	if ((!(de->data->flag & CHUNK_FLAG_DUP)) && (COMPRESSION_ENABLED)) {
 #ifdef PERF_PROFILING
 		cycle_st = get_cpucycle();
@@ -387,7 +489,24 @@ back_worker_compress_send(struct data_entry *de, struct worker *w)
 	 */
 	DBG("Send %d bytes through WAN fd %d", len, w->wan_stream->fd);
 	
-	write_socket(w->wan_stream->fd, (char *)de->data, len);
+
+        CHUNK_SIZE_LOG(
+            "[SEND_CHUNK] src_len=%u before_len=%u after_len=%u send_len=%d before_flag=0x%x after_flag=0x%x dup=%d compressed=%d",
+            before_src_len,
+            before_chunk_len,
+            (unsigned)de->data->len,
+            len,
+            before_flag,
+            de->data->flag,
+            !!(de->data->flag & CHUNK_FLAG_DUP),
+            !!(de->data->flag & CHUNK_FLAG_COMPRESSED)
+        );
+	if (enqueue_tx(de->stream->app, w->wan_stream->fd,
+            w->wan_stream->io.stream_type,
+            (char *)de->data, len) == -1) {
+                APPERR("Failed to queue WAN payload for fd %d.",
+                    w->wan_stream->fd);
+        }
 
 #ifdef PERF_PROFILING
 	ts = get_time_us();
@@ -430,12 +549,32 @@ back_worker_decompress_send(struct chunk *rx_ck, struct stream_entry *wan,
 
 	if (ck->flag & CHUNK_FLAG_COMPRESSED) {
 		DBG("Decompressing packet..");
+		unsigned restore_comp_before = ck->len;
+		unsigned restore_comp_before_flag = ck->flag;
 		decompress_chunk_raw(CHUNK_DATA(rx_ck), &ck->len, &ck->src_len, ck);
+
+		CHUNK_SIZE_LOG(
+		    "[RESTORE_COMP] before_len=%u after_len=%u before_flag=0x%x after_flag=0x%x",
+		    restore_comp_before,
+		    (unsigned)ck->src_len,
+		    restore_comp_before_flag,
+		    (unsigned)ck->flag
+		);
 	}
 
 	if (ck->flag & CHUNK_FLAG_DUP) {
 		DBG("Dup packet, fetching from ht.. (hash%u)", ck->dhdr.hash);
+		unsigned restore_dedup_before = ck->len;
+		unsigned restore_dedup_before_flag = ck->flag;
 		dedup_get_orig_chunk(&ck, &wan->worker->ht);
+
+		CHUNK_SIZE_LOG(
+		    "[RESTORE_DEDUP] before_len=%u after_len=%u before_flag=0x%x after_flag=0x%x",
+		    restore_dedup_before,
+		    (unsigned)ck->src_len,
+		    restore_dedup_before_flag,
+		    (unsigned)ck->flag
+		);
 	} else {
 		if (!(ck->flag & CHUNK_FLAG_COMPRESSED))
 			memcpy(CHUNK_DATA(ck), CHUNK_DATA(rx_ck), ck->src_len);
@@ -469,20 +608,14 @@ back_worker_decompress_send(struct chunk *rx_ck, struct stream_entry *wan,
 				goto create_stream;
 			}
 			
-			error = init_socket(&fd);
-			if (error) {
-				SYSERR(errno, "Failed to create socket fd.");
+			fd = connect_linux_socket(
+			    app->wan_addr, app->wan_port);
+			if (fd < 0) {
+				SYSERR(errno,
+				    "Failed to connect to Linux remote APP.");
 				exit(0);
 			}
 
-			error = connect_socket(fd, app->wan_addr, app->wan_port, 
-			    app->somig_on_wan ? app->somig_mode : 0,
-			    app->wan_mso_addr, app->wan_ctl_port,
-			    app->wan_rso_addr, app->wan_ctl_port);
-			if (error) {
-				SYSERR(errno, "Failed to connect to remote WAN.");
-				exit(0);
-			}
 
 create_stream:
 			/* Choose a front worker to handle the rx event */
@@ -502,31 +635,38 @@ create_stream:
 			TAILQ_INIT(&new_stream->ioq);
 
 			//printf("new conn rem fd %d worker %d\n", fd, selected_worker->id);
-			 
-			pthread_mutex_lock(&app->streams_mtx);
+			ev_io_init(&new_stream->io.evio,
+			    front_worker_fd_cb, new_stream->fd, EV_READ);
+			ev_io_start(selected_worker->loop,
+			    &new_stream->io.evio);
 
-			TAILQ_INSERT_TAIL(&(app->streams), new_stream, list);
+			DBG("Linux target fd%d registered to worker id%d",
+			    new_stream->fd, selected_worker->id);
 
-			ev_io_init(&new_stream->io.evio, front_worker_fd_cb,
-			    new_stream->fd, EV_READ);
-			ev_io_start(selected_worker->loop, &new_stream->io.evio);
-
-			pthread_mutex_unlock(&app->streams_mtx);
+pthread_mutex_lock(&app->streams_mtx);
+TAILQ_INSERT_TAIL(&app->streams, new_stream, list);
+pthread_mutex_unlock(&app->streams_mtx);
 
 			found = 1;
 		}
 	}
 
 	if (!found) {
-		APPERR("Failed to find corresponding stream.");
-		exit(0);
+	        APPERR("Corresponding stream already closed; dropping chunk.");
+
+	        if (!(ck->flag & CHUNK_FLAG_DONTFREE))
+	                chunk_free(ck);
+
+	        return;
 	}
 
-	n = write_socket(new_stream->fd, CHUNK_DATA(ck), ck->src_len);
-	if (n == -1) {
-		SYSERR(errno, "Failed to send payload to remote WAN (fd %d)", new_stream->fd);
-		stream_clean(new_stream);
-	}
+	n = enqueue_tx(app, new_stream->fd,
+            new_stream->io.stream_type,
+            CHUNK_DATA(ck), ck->src_len);
+        if (n == -1) {
+                APPERR("Failed to queue payload for fd %d.",
+                    new_stream->fd);
+        }
 
 	if (!(ck->flag & CHUNK_FLAG_DONTFREE))
 		chunk_free(ck);
@@ -549,8 +689,42 @@ worker_loop(void *worker)
 	struct worker *w = (struct worker *)worker;
 	struct wanacc_app *app = w->app;
 	ev_timer dummy_watcher;
+	cpu_set_t worker_cpuset;
+	int affinity_ret;
 
-	w->loop = ev_loop_new(0);
+	int pinned_cpu = -1;
+
+        CPU_ZERO(&worker_cpuset);
+
+        if (w->type == WANACC_WORKER_FRONT) {
+                pinned_cpu = 1 + w->id;      /* front id0->CPU1, id1->CPU2 */
+        } else if (w->type == WANACC_WORKER_BACK) {
+                pinned_cpu = 1 + app->front_worker_count + w->id;      /* back id0->CPU3, id1->CPU4, id2->CPU5 */
+        }
+
+        if (pinned_cpu >= 1 && pinned_cpu <= 5) {
+                CPU_SET(pinned_cpu, &worker_cpuset);
+        } else {
+                fprintf(stderr,
+                    "Invalid worker id%d type%d CPU mapping\n",
+                    w->id, w->type);
+                return NULL;
+        }
+
+        affinity_ret = pthread_setaffinity_np(
+            pthread_self(), sizeof(worker_cpuset), &worker_cpuset);
+
+        if (affinity_ret != 0) {
+                fprintf(stderr,
+                    "Failed to set worker id%d type%d affinity: %s\n",
+                    w->id, w->type, strerror(affinity_ret));
+        } else {
+                fprintf(stderr,
+                    "Worker id%d type%d pinned to CPU %d\n",
+                    w->id, w->type, pinned_cpu);
+        }
+
+        w->loop = ev_loop_new(0);
 	ev_async_start(w->loop, &w->ev_queue.io);
 	
 	ev_timer_init(&dummy_watcher, &dummy_cb, 1, 1);

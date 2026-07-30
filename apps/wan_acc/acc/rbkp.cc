@@ -16,7 +16,9 @@
 #elif HASH_RANDOM
     #include <time.h>
 #else
-    #include <sha256.h>
+    #ifndef HASH_MD5
+#include <sha256.h>
+#endif
 #endif
 
 #include "lz4.h"

@@ -39,7 +39,11 @@ init_socket(int *ifd)
 		exit(0);
 	}
 
+	#ifdef SO_NOSIGPIPE
 	error = setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
+#else
+	error = 0;
+#endif
 	if (error != 0) {
 		SYSERR(error, "Failed to set SO_NOSIGPIPE.\n");
 		exit(0);

@@ -35,12 +35,16 @@ init_app(struct wanacc_app *app)
 	app->streams_count = 0;
 	//app->streams = TAILQ_HEAD_INITIALIZER(app->streams);
 	TAILQ_INIT(&app->streams);
-	app->streams_mtx = PTHREAD_MUTEX_INITIALIZER;
+	pthread_mutex_init(&app->streams_mtx, NULL);
 	//app->ioq = TAILQ_HEAD_INITIALIZER(app->ioq);
 	app->usage_fp = NULL;
 	app->usage_fn = NULL;
 	app->run_time = 0;
 	app->verbose = 0;
+
+app->epfd = -1;
+TAILQ_INIT(&app->txq);
+pthread_mutex_init(&app->txq_mtx, NULL);
 
 	app->front_worker_count = 1;
 	app->front_workers = NULL;
@@ -51,7 +55,7 @@ init_app(struct wanacc_app *app)
 	app->front_worker_next = 0;
 	app->back_worker_next = 0;
 
-	app->worker_mtx = PTHREAD_MUTEX_INITIALIZER;
+	pthread_mutex_init(&app->worker_mtx, NULL);
 	app->worker_count = 0;
 
 	app->connect_to_wan = 0;
