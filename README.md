@@ -1,63 +1,494 @@
 # HA/TCP WAN Accelerator
 
-이 저장소는 HA/TCP 기반 WAN Accelerator를 F-Stack 환경에서 동작하도록 수정하고, 실험 및 성능 분석을 진행한 내용을 정리한 저장소입니다.
+This repository contains the HA/TCP-side WAN Accelerator implementation, experiment code, and related documentation used during the HA/TCP/F-Stack integration work.
 
-## 작업 기간
+The original HA/TCP project is available at:
 
-2026.07.01 ~ 2026.07.30
+https://github.com/rcslab/hatcp
 
-## 작업 목표
+This repository is a modified fork used for WAN Accelerator development and experiments.
 
-기존 wan_acc 애플리케이션은 Linux socket API 기반으로 동작했습니다.
+For the final F-Stack-integrated HA/TCP implementation, use:
 
-본 작업에서는 WAN 구간 통신을 F-Stack API 기반으로 변경하여, DPDK/F-Stack 환경에서 HA/TCP 관련 기능을 포함한 WAN Accelerator를 실행할 수 있도록 수정했습니다.
+https://github.com/DaEun2Lee/f-stack/tree/integrated
 
-## 주요 작업 내용
+Korean documentation is available in [README_KOR.md](README_KOR.md).
 
-- HA/TCP의 TCP migration 관련 코드를 F-Stack/FreeBSD TCP stack에 이식
-- wan_acc의 WAN 측 socket 처리를 Linux socket API에서 F-Stack API로 변경
-- MS와 ES 사이의 WAN 연결 구조 수정
-- Front Worker와 Back Worker 역할 분리
-- SOMIGRATION, SMCP, F-Stack link 관련 빌드 설정 추가
-- MS-to-ES 비동기 WAN connect 문제 해결
-- ES WAN listener를 F-Stack epoll에 등록하도록 수정
-- wrkwrk, perf, FlameGraph를 이용한 성능 측정 및 병목 분석
+---
 
-## 전체 구조
+## Project Period
 
+2026-07-01 to 2026-07-30
+
+---
+
+## Project Goal
+
+The original `wan_acc` application was based on the Linux socket API.
+
+The goal of this work was to adapt the WAN-side communication path so that the WAN Accelerator could operate with F-Stack/DPDK while incorporating HA/TCP-related functionality.
+
+The work also included changes to the WAN connection flow, worker organization, build configuration, performance measurement, and debugging of the HA/TCP/F-Stack integration.
+
+---
+
+## Repository Roles
+
+This repository and the modified F-Stack repository serve different purposes.
+
+### `DaEun2Lee/hatcp`
+
+This repository contains the HA/TCP-side WAN Accelerator development, including:
+
+- WAN Accelerator source changes
+- Front/Back Worker restructuring
+- asynchronous WAN connection handling
+- F-Stack compatibility code in `apps/wan_acc`
+- `wrkwrk` modifications
+- experiment scripts
+- performance-analysis documents
+- debugging history
+
+### `DaEun2Lee/f-stack`
+
+The actual HA/TCP port integrated into F-Stack is maintained separately:
+
+https://github.com/DaEun2Lee/f-stack
+
+Use the `integrated` branch for the F-Stack-based HA/TCP WAN Accelerator.
+
+That repository contains the F-Stack/FreeBSD-side integration, including HA/TCP TCP migration support, SMCP-related changes, socket/TCP-stack modifications, and the F-Stack-compatible WAN Accelerator source.
+
+---
+
+## Branches
+
+### `master`
+
+- Preserves the original HA/TCP baseline.
+- Corresponds to the upstream HA/TCP repository lineage.
+- Intended to remain close to `rcslab/hatcp`.
+
+### `main`
+
+- Default branch of this repository.
+- Contains the modified HA/TCP/WAN Accelerator implementation used for experiments.
+- Includes source changes, experiment scripts, documentation, and performance-analysis material.
+
+For this repository, use `main` unless you specifically need the original HA/TCP baseline.
+
+---
+
+## Main Work
+
+Major work performed during this project includes:
+
+- adapting WAN-side socket handling for F-Stack
+- modifying the MS-to-ES WAN connection flow
+- separating Front Worker and Back Worker roles
+- adding SOMIGRATION-, SMCP-, and F-Stack-related build configuration
+- handling asynchronous MS-to-ES WAN connection establishment
+- registering the ES WAN listener with F-Stack epoll
+- improving TX queue handling for non-blocking WAN connections
+- fixing stream/fd cleanup and invalid-stream handling
+- modifying `wrkwrk` for experiment traffic generation
+- measuring performance with `wrkwrk`, `perf`, and FlameGraph
+- analyzing CPU bottlenecks on MS and ES
+
+The HA/TCP TCP migration and FreeBSD TCP-stack integration itself is maintained in the separate F-Stack repository.
+
+---
+
+## Experiment Topology
+
+```text
 Client / wrkwrk
-→ MS WAN Accelerator
-→ F-Stack / DPDK WAN 구간
-→ ES WAN Accelerator
-→ Remote Application Server
+      |
+      v
+MS WAN Accelerator
+      |
+      v
+F-Stack / DPDK WAN path
+      |
+      v
+ES WAN Accelerator
+      |
+      v
+Remote Application Server
+```
 
-## 주요 수정 파일
+The WAN path between MS and ES was the primary target of the F-Stack integration.
 
-- apps/wan_acc/server.cc : MS/ES 연결 처리, F-Stack epoll, WAN path 처리
-- apps/wan_acc/worker.cc : Front/Back Worker 데이터 처리 흐름
-- apps/wan_acc/netutils.cc : socket abstraction 및 F-Stack API 처리
-- apps/wan_acc/main.cc : 실행 옵션 및 초기화 처리
-- apps/wan_acc/makefile_somig : SOMIGRATION/F-Stack 빌드 설정
-- apps/wan_acc/hatcp_compat.h : HA/TCP 호환 정의
-- apps/wrkwrk/wrkwrk.cc : 측정 도구 수정
+---
 
-## 대표 성능 결과
+## Important Modified Files
 
-- 평균 지연시간: 약 135.558 ms
-- 평균 처리량: 약 333.742 MB/s = 약 2.734 Gbps
-- 평균 요청 처리량: 약 32.586 requests/s
-- TCP 재전송: 0회
+### WAN Accelerator
 
-## 현재 상태
+- `apps/wan_acc/server.cc`
+  - MS/ES connection handling
+  - asynchronous WAN connect
+  - F-Stack epoll event handling
+  - WAN path state handling
 
-2026년 7월 30일 기준, 수정된 WAN Accelerator 소스코드는 GitHub 저장소에 업로드되었습니다.
+- `apps/wan_acc/worker.cc`
+  - Front Worker / Back Worker processing flow
+  - chunk/reference processing
+  - TX/RX path handling
 
-## 문서 목록
+- `apps/wan_acc/netutils.cc`
+  - socket abstraction
+  - F-Stack API handling
+  - WAN-side socket operations
 
-자세한 정리 문서는 아래 파일에서 확인할 수 있습니다.
+- `apps/wan_acc/netutils.h`
+  - WAN networking declarations and compatibility definitions
 
-- [빌드 및 실행 방법](docs/01_build_and_execution.md)
-- [Front Worker / Back Worker 구조](docs/02_front_back_worker.md)
-- [디버깅 및 문제 해결 기록](docs/03_debugging_history.md)
-- [성능 측정 및 perf/FlameGraph 분석](docs/04_performance_and_flamegraph.md)
-- [2026년 7월 작업 일지](timeline/2026-07-01_to_07-30.md)
+- `apps/wan_acc/main.cc`
+  - execution options
+  - application initialization
+
+- `apps/wan_acc/acc.cc`
+  - accelerator data-path logic
+
+- `apps/wan_acc/acc.h`
+  - accelerator-related declarations
+
+- `apps/wan_acc/hatcp_compat.h`
+  - HA/TCP/F-Stack compatibility definitions
+
+### Build Files
+
+- `apps/wan_acc/makefile`
+- `apps/wan_acc/Makefile`
+- `apps/wan_acc/makefile_fstack`
+- `apps/wan_acc/makefile_somig`
+
+These files contain build configurations used for different experiment stages and HA/TCP/F-Stack integration modes.
+
+### Workload Generator
+
+- `apps/wrkwrk/wrkwrk.cc`
+- `apps/wrkwrk/netutil.cc`
+- `apps/wrkwrk/utils.h`
+
+These files contain modifications used for WAN Accelerator traffic generation and measurement.
+
+---
+
+## Front Worker / Back Worker Architecture
+
+The WAN Accelerator does more than simply forward data.
+
+The processing path includes:
+
+```text
+Receive data
+  -> Front Worker
+  -> chunking
+  -> duplicate detection
+  -> classify new/reference chunks
+  -> Back Worker
+  -> compression/decompression or reconstruction
+  -> output-buffer generation
+  -> transmit
+```
+
+### Front Worker
+
+The Front Worker is responsible for input-side processing:
+
+- receiving data from the Client or WAN side
+- managing input buffers
+- splitting data into chunks
+- calculating chunk hashes
+- checking duplicate chunks
+- classifying new chunks and reference chunks
+- dispatching work to Back Workers
+
+### Back Worker
+
+The Back Worker is responsible for output-side processing:
+
+- receiving chunk work from Front Workers
+- processing new chunks
+- reconstructing reference chunks
+- compression/decompression
+- generating output buffers
+- transmitting data toward the WAN side or backend application
+
+Detailed documentation:
+
+[docs/02_front_back_worker.md](docs/02_front_back_worker.md)
+
+---
+
+## Build and Execution
+
+Detailed build and execution instructions are documented in:
+
+[docs/01_build_and_execution.md](docs/01_build_and_execution.md)
+
+A representative build command for the HA/TCP-side WAN Accelerator is:
+
+```bash
+cd ~/kwon/hatcp/apps/wan_acc
+make -f makefile_somig clean
+make -f makefile_somig -j$(nproc)
+```
+
+A successful build produces the `wanacc` executable.
+
+> **Note**
+>
+> This repository documents the HA/TCP-side development and experiment environment.
+> For the final F-Stack-integrated source tree, use the `integrated` branch of:
+>
+> https://github.com/DaEun2Lee/f-stack
+
+---
+
+## Representative Execution
+
+### ES
+
+```bash
+cd ~/kwon/hatcp/apps/wan_acc
+
+./wanacc \
+  -M es \
+  -S <ES_LOCAL_IP> \
+  -p 3301 \
+  -E <BACKEND_SERVER_IP> \
+  -e 3302 \
+  -f 2 \
+  -b 3
+```
+
+### MS
+
+```bash
+cd ~/kwon/hatcp/apps/wan_acc
+
+./wanacc \
+  -M ms \
+  -S <MS_LOCAL_IP> \
+  -p 3300 \
+  -E <ES_WAN_IP> \
+  -e 3301 \
+  -f 2 \
+  -b 3
+```
+
+### Client / wrkwrk
+
+```bash
+cd ~/kwon/hatcp/apps/wrkwrk
+
+./wrkwrk \
+  -m wanacc \
+  -s <MS_CLIENT_SIDE_IP> \
+  -p 3300 \
+  -T 1 \
+  -c 8 \
+  -d 30 \
+  -f http://<BACKEND_SERVER_IP>:3302/<TEST_FILE>
+```
+
+Replace all addresses and test-file paths with values appropriate for the current environment.
+
+---
+
+## Important Runtime Options
+
+- `-M ms`
+  - run as MS WAN Accelerator
+
+- `-M es`
+  - run as ES WAN Accelerator
+
+- `-S`
+  - local IP address
+
+- `-p`
+  - local listening port
+
+- `-E`
+  - remote WAN Accelerator or backend IP address
+
+- `-e`
+  - remote or backend port
+
+- `-f`
+  - number of Front Workers
+
+- `-b`
+  - number of Back Workers
+
+### Feature-disable flags
+
+The `-o` option is a bit flag.
+
+- `-o 0`
+  - deduplication enabled
+  - compression enabled
+
+- `-o 1`
+  - deduplication disabled
+  - compression enabled
+
+- `-o 2`
+  - deduplication enabled
+  - compression disabled
+
+- `-o 3`
+  - deduplication disabled
+  - compression disabled
+
+Bit definitions:
+
+```text
+0x1 = NO_DEDUP
+0x2 = NO_COMPRESSION
+```
+
+---
+
+## Representative Performance Result
+
+One representative experiment used:
+
+- transfer file size: 10 MiB
+- concurrent connections: 8
+- Front Workers: 2
+- Back Workers: 3
+- measurement duration: 30 seconds
+
+Representative result:
+
+- average latency: approximately 135.558 ms
+- average throughput: approximately 333.742 MB/s
+- equivalent throughput: approximately 2.734 Gbps
+- average request rate: approximately 32.586 requests/s
+- TCP retransmissions: 0
+
+These values are representative experiment results, not guaranteed performance for other systems.
+
+Performance depends on CPU allocation, NIC/DPDK configuration, worker count, test workload, and server environment.
+
+Detailed results and analysis are available in:
+
+[docs/04_performance_and_flamegraph.md](docs/04_performance_and_flamegraph.md)
+
+---
+
+## Performance Analysis
+
+`perf` and FlameGraph were used to identify CPU bottlenecks.
+
+Representative observations included:
+
+### MS
+
+High CPU usage was observed in areas such as:
+
+- memory initialization
+- `rte_rdtsc`
+- F-Stack `main_loop`
+- ring-related processing
+
+### ES
+
+A large CPU share was observed in:
+
+- `rbkp_chunker`
+- chunk processing
+- duplicate-elimination-related processing
+- reference reconstruction
+
+The measurements showed that MS and ES can have different CPU bottlenecks.
+
+See:
+
+[docs/04_performance_and_flamegraph.md](docs/04_performance_and_flamegraph.md)
+
+---
+
+## Debugging and Integration Notes
+
+Important issues encountered during development included:
+
+- FreeBSD version mismatch between HA/TCP and F-Stack
+- inability to replace the entire F-Stack FreeBSD tree with HA/TCP code
+- Linux socket paths remaining in WAN-side processing
+- non-blocking `connect()` / `EINPROGRESS` handling
+- `EPOLLOUT` event ordering
+- TX queue handling before WAN connection completion
+- ES WAN listener registration
+- stale stream/fd cleanup
+- Makefile and link-option problems
+- hugepage and DPDK configuration
+- perf/FlameGraph analysis
+
+Instead of replacing the complete FreeBSD source tree, HA/TCP-related functionality was selectively ported into the F-Stack/FreeBSD stack.
+
+Detailed debugging history:
+
+[docs/03_debugging_history.md](docs/03_debugging_history.md)
+
+---
+
+## Documentation
+
+- [Build and Execution](docs/01_build_and_execution.md)
+- [Front Worker / Back Worker Architecture](docs/02_front_back_worker.md)
+- [Debugging and Troubleshooting History](docs/03_debugging_history.md)
+- [Performance and perf/FlameGraph Analysis](docs/04_performance_and_flamegraph.md)
+- [Development Timeline](timeline/2026-07-01_to_07-30.md)
+
+---
+
+## Related Repositories
+
+### Original HA/TCP
+
+https://github.com/rcslab/hatcp
+
+### Modified HA/TCP / WAN Accelerator
+
+https://github.com/DaEun2Lee/hatcp
+
+### HA/TCP Port Integrated into F-Stack
+
+https://github.com/DaEun2Lee/f-stack/tree/integrated
+
+---
+
+## Current Status
+
+As of 2026-08-13:
+
+- `main` contains the modified HA/TCP/WAN Accelerator implementation.
+- `master` preserves the original HA/TCP baseline.
+- `main` is intended to be the default branch of this repository.
+- the HA/TCP port integrated into F-Stack is maintained in `DaEun2Lee/f-stack` on the `integrated` branch.
+- detailed build, debugging, worker-architecture, and performance documentation is included in this repository.
+
+---
+
+## Notes
+
+This repository contains research and experiment code.
+
+Before reproducing the environment on another server, verify:
+
+- NIC configuration
+- DPDK binding
+- hugepage configuration
+- F-Stack configuration
+- CPU/lcore allocation
+- IP addresses and ports
+- worker counts
+- build options
+
+Server-specific values from the original experiment should not be assumed to work unchanged in a different environment.
