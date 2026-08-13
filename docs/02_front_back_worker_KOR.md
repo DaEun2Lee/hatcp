@@ -1,5 +1,7 @@
 # Front Worker / Back Worker 구조
 
+English version: [02_front_back_worker.md](02_front_back_worker.md)
+
 이 문서는 WAN Accelerator에서 Front Worker와 Back Worker의 역할을 구분하여 정리한 문서이다.
 
 ## 1. Worker 역할을 구분한 이유
@@ -12,6 +14,7 @@ WAN Accelerator는 단순히 데이터를 전달하는 프로그램이 아니라
 
 ## 2. 전체 처리 흐름
 
+```text
 Client 또는 WAN 측에서 데이터 수신
 -> Front Worker가 입력 데이터 처리
 -> chunk 분할
@@ -20,6 +23,7 @@ Client 또는 WAN 측에서 데이터 수신
 -> Back Worker로 작업 전달
 -> Back Worker가 압축/복원/출력 버퍼 생성
 -> WAN 또는 Application 방향으로 전송
+```
 
 ## 3. Front Worker 역할
 
@@ -56,14 +60,14 @@ Back Worker는 Front Worker에서 넘겨받은 작업을 실제 출력 가능한
 
 MS는 Client로부터 요청을 받고 ES로 데이터를 전달한다.
 
-MS 측 흐름은 다음과 같이 볼 수 있다.
-
+```text
 Client 요청 수신
 -> MS Front Worker
 -> chunk 분할 및 중복 검사
 -> MS Back Worker
 -> WAN 측 F-Stack path
 -> ES로 전송
+```
 
 MS에서는 Client 요청을 WAN 구간으로 넘기는 과정에서 F-Stack API 기반 송신 처리가 중요하다.
 
@@ -71,14 +75,14 @@ MS에서는 Client 요청을 WAN 구간으로 넘기는 과정에서 F-Stack API
 
 ES는 MS에서 전달된 WAN 데이터를 받고 Backend Application으로 전달한다.
 
-ES 측 흐름은 다음과 같이 볼 수 있다.
-
+```text
 MS에서 WAN 데이터 수신
 -> ES Front Worker
 -> chunk/reference 해석
 -> ES Back Worker
 -> 원본 stream 복원
 -> Backend Application으로 전달
+```
 
 ES에서는 전달받은 chunk/reference를 해석하고 원본 데이터를 복원하는 작업이 중요하다.
 
@@ -88,9 +92,11 @@ ES에서는 전달받은 chunk/reference를 해석하고 원본 데이터를 복
 
 대표적인 worker 설정은 다음과 같다.
 
+```text
 Front Worker: 2개
 Back Worker : 3개
 Total Worker: 5개
+```
 
 이 구조에서는 F-Stack network loop와 Front/Back Worker가 서로 다른 CPU 역할을 갖도록 구성하는 것이 중요하다.
 
